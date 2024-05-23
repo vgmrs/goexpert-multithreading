@@ -5,71 +5,67 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 )
 
-func getCEP1(cep string) (map[string]string, error) {
-	req, err := http.NewRequest("GET", "https://brasilapi.com.br/api/cep/v1/01153000"+cep, nil)
+type response struct {
+	data    map[string]interface{}
+	apiName string
+}
+
+func makeRequest(apiURL string, apiName string, ch chan<- response, errChan chan<- error) {
+	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
-		return nil, err
+		errChan <- err
+		return
 	}
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		errChan <- err
+		return
 	}
 	defer res.Body.Close()
 
-	var data map[string]string
+	var data map[string]interface{}
 	err = json.NewDecoder(res.Body).Decode(&data)
 	if err != nil {
-		return nil, err
+		errChan <- err
+		return
 	}
 
-	log.Printf(" GET CEP API 1: %v", data)
-
-	return data, nil
+	ch <- response{data: data, apiName: apiName}
 }
 
-func getCEP2(cep string) (map[string]string, error) {
-	req, err := http.NewRequest("GET", "http://viacep.com.br/ws/"+cep+"/json/", nil)
-	if err != nil {
-		return nil, err
+func getCEP(cep string) (response, error) {
+	chan1 := make(chan response)
+	chan2 := make(chan response)
+	errChan := make(chan error, 2)
+
+	go makeRequest("https://brasilapi.com.br/api/cep/v1/"+cep, "BrasilAPI", chan1, errChan)
+	go makeRequest("http://viacep.com.br/ws/"+cep+"/json/", "ViaCEP", chan2, errChan)
+
+	select {
+	case resp := <-chan1:
+		return resp, nil
+	case resp := <-chan2:
+		return resp, nil
+	case err := <-errChan:
+		return response{}, err
+	case <-time.After(time.Second * 1):
+		return response{}, fmt.Errorf("timeout")
 	}
-
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-
-	var data map[string]string
-	err = json.NewDecoder(res.Body).Decode(&data)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Printf(" GET CEP API 2: %v", data)
-
-	return data, nil
-}
-
-func getCEP(cep string) (string, error) {
-	go getCEP1(cep)
-	getCEP2(cep)
-
-	// TODO: use select/case to catch first response from APIs
-
-	return cep, nil
 }
 
 func main() {
-	// TODO: get cep from command line
-	cep := ""
+	var cep string
+	fmt.Print("Enter CEP number: ")
+	fmt.Scanln(&cep)
 
 	resp, err := getCEP(cep)
 	if err != nil {
-		panic(err)
+		log.Fatalf("Error: %v", err)
 	}
 
-	fmt.Println(resp)
+	log.Printf("Response from API %s with result: %v", resp.apiName, resp.data)
 }
